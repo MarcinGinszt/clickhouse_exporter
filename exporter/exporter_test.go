@@ -1,18 +1,23 @@
 package exporter
 
 import (
-	"net/url"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
+	sqlmock "gopkg.in/DATA-DOG/go-sqlmock.v1"
 )
 
 func TestScrape(t *testing.T) {
-	clickhouseUrl, err := url.Parse("http://127.0.0.1:8123/")
+	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	exporter := NewExporter(*clickhouseUrl, false, "", "")
+	defer db.Close()
+
+	exporter, err := NewExporter(db)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	t.Run("Describe", func(t *testing.T) {
 		ch := make(chan *prometheus.Desc)
@@ -29,14 +34,28 @@ func TestScrape(t *testing.T) {
 		ch := make(chan prometheus.Metric)
 		var err error
 		go func() {
+			rows := sqlmock.NewRows([]string{"name", "value"}).
+				AddRow("one", 1).
+				AddRow("two", 2)
+			partsRows := sqlmock.NewRows([]string{"database", "table", "bytes", "parts", "rows"}).
+				AddRow("db", "one", 1, 2, 3).
+				AddRow("db", "two", 2, 3, 4)
+			mock.ExpectQuery("^select \\*").WillReturnRows(rows)
+			mock.ExpectQuery("^select \\*").WillReturnRows(rows)
+			mock.ExpectQuery("^select \\*").WillReturnRows(rows)
+			mock.ExpectQuery("^select database").WillReturnRows(partsRows)
 			err = exporter.collect(ch)
 			if err != nil {
-				panic("failed")
+				panic(err)
 			}
 			close(ch)
 		}()
 
 		for range ch {
+		}
+
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Errorf("there were unfulfilled expectations: %s", err)
 		}
 	})
 }

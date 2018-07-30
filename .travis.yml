@@ -5,9 +5,10 @@ language: go
 go:
   - 1.8.x
   - 1.9.x
+  - 1.10.x
   - master
 
-go_import_path: github.com/f1yegor/clickhouse_exporter
+go_import_path: github.com/nineinchnick/clickhouse_exporter
 
 services:
   - docker

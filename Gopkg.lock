@@ -27,7 +27,10 @@
 
 [[projects]]
   name = "github.com/prometheus/client_golang"
-  packages = ["prometheus"]
+  packages = [
+    "prometheus",
+    "prometheus/promhttp"
+  ]
   revision = "c5b7fccd204277076155f10851dad72b76a49317"
   version = "v0.8.0"
 
@@ -40,7 +43,11 @@
 [[projects]]
   branch = "master"
   name = "github.com/prometheus/common"
-  packages = ["expfmt","internal/bitbucket.org/ww/goautoneg","model"]
+  packages = [
+    "expfmt",
+    "internal/bitbucket.org/ww/goautoneg",
+    "model"
+  ]
   revision = "3e6a7635bac6573d43f49f97b47eb9bda195dba8"
 
 [[projects]]
@@ -52,7 +59,10 @@
 [[projects]]
   branch = "master"
   name = "github.com/prometheus/procfs"
-  packages = [".","xfs"]
+  packages = [
+    ".",
+    "xfs"
+  ]
   revision = "e645f4e5aaa8506fc71d6edbc5c4ff02c04c46f2"
 
 [[projects]]
@@ -61,9 +71,15 @@
   packages = ["unix"]
   revision = "abf9c25f54453410d0c6668e519582a9e1115027"
 
+[[projects]]
+  name = "gopkg.in/DATA-DOG/go-sqlmock.v1"
+  packages = ["."]
+  revision = "d76b18b42f285b792bf985118980ce9eacea9d10"
+  version = "v1.3.0"
+
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "66a89abcc4db7160ad4b91ca6c16049a616004060b3c42d4a13a8d98f5838d90"
+  inputs-digest = "40edfaeddd5a489b2c59369630aaa65a5e846401d2291f3847074c0f83fc5739"
   solver-name = "gps-cdcl"
   solver-version = 1

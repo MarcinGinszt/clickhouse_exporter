@@ -1,34 +1,33 @@
 package main
 
 import (
+	"database/sql"
 	"flag"
 	"net/http"
-	"net/url"
-	"os"
 
-	"github.com/f1yegor/clickhouse_exporter/exporter"
+	"github.com/nineinchnick/clickhouse_exporter/exporter"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/log"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/log"
 )
 
 var (
 	listeningAddress    = flag.String("telemetry.address", ":9116", "Address on which to expose metrics.")
 	metricsEndpoint     = flag.String("telemetry.endpoint", "/metrics", "Path under which to expose metrics.")
-	clickhouseScrapeURI = flag.String("scrape_uri", "http://localhost:8123/", "URI to clickhouse http endpoint")
-	insecure            = flag.Bool("insecure", true, "Ignore server certificate if using https")
-	user                = os.Getenv("CLICKHOUSE_USER")
-	password            = os.Getenv("CLICKHOUSE_PASSWORD")
+	clickhouseScrapeURI = flag.String("scrape_uri", "tcp://localhost:9000/", "URI to clickhouse tcp endpoint")
 )
 
 func main() {
 	flag.Parse()
 
-	uri, err := url.Parse(*clickhouseScrapeURI)
+	db, err := sql.Open("clickhouse", *clickhouseScrapeURI)
 	if err != nil {
 		log.Fatal(err)
 	}
-	e := exporter.NewExporter(*uri, *insecure, user, password)
+	e, err := exporter.NewExporter(db)
+	if err != nil {
+		log.Fatal(err)
+	}
 	prometheus.MustRegister(e)
 
 	log.Printf("Starting Server: %s", *listeningAddress)

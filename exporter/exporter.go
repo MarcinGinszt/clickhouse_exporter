@@ -1,14 +1,11 @@
 package exporter
 
 import (
-	"crypto/tls"
-	"fmt"
-	"io/ioutil"
-	"net/http"
-	"net/url"
-	"strconv"
+	"context"
+	"database/sql"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -17,17 +14,21 @@ import (
 
 const (
 	namespace = "clickhouse" // For Prometheus metrics.
+
+	metricsQuery      = "select * from system.metrics"
+	asyncMetricsQuery = "select * from system.asynchronous_metrics"
+	eventsQuery       = "select * from system.events"
+	partsQuery        = "select database, table, sum(bytes) as bytes, count() as parts, sum(rows) as rows from system.parts where active = 1 group by database, table"
+
+	// Timeout is default for all database operations
+	Timeout = 1 * time.Second
 )
 
-// Exporter collects clickhouse stats from the given URI and exports them using
+// Exporter collects clickhouse stats and exports them using
 // the prometheus metrics package.
 type Exporter struct {
-	metricsURI      string
-	asyncMetricsURI string
-	eventsURI       string
-	partsURI        string
-	mutex           sync.RWMutex
-	client          *http.Client
+	conn  *sql.Conn
+	mutex sync.RWMutex
 
 	scrapeFailures prometheus.Counter
 
@@ -39,29 +40,17 @@ type Exporter struct {
 }
 
 // NewExporter returns an initialized Exporter.
-func NewExporter(uri url.URL, insecure bool, user, password string) *Exporter {
-	q := uri.Query()
-	metricsURI := uri
-	q.Set("query", "select * from system.metrics")
-	metricsURI.RawQuery = q.Encode()
+func NewExporter(db *sql.DB) (*Exporter, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	defer cancel()
 
-	asyncMetricsURI := uri
-	q.Set("query", "select * from system.asynchronous_metrics")
-	asyncMetricsURI.RawQuery = q.Encode()
-
-	eventsURI := uri
-	q.Set("query", "select * from system.events")
-	eventsURI.RawQuery = q.Encode()
-
-	partsURI := uri
-	q.Set("query", "select database, table, sum(bytes) as bytes, count() as parts, sum(rows) as rows from system.parts where active = 1 group by database, table")
-	partsURI.RawQuery = q.Encode()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Exporter{
-		metricsURI:      metricsURI.String(),
-		asyncMetricsURI: asyncMetricsURI.String(),
-		eventsURI:       eventsURI.String(),
-		partsURI:        partsURI.String(),
+		conn: conn,
 		scrapeFailures: prometheus.NewCounter(prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "exporter_scrape_failures_total",
@@ -69,14 +58,7 @@ func NewExporter(uri url.URL, insecure bool, user, password string) *Exporter {
 		}),
 		gauges:   make([]*prometheus.GaugeVec, 0, 20),
 		counters: make([]*prometheus.CounterVec, 0, 20),
-		client: &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: insecure},
-			},
-		},
-		user:     user,
-		password: password,
-	}
+	}, nil
 }
 
 // Describe describes all the metrics ever exported by the clickhouse exporter. It
@@ -102,9 +84,9 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 }
 
 func (e *Exporter) collect(ch chan<- prometheus.Metric) error {
-	metrics, err := e.parseKeyValueResponse(e.metricsURI)
+	metrics, err := e.query(metricsQuery)
 	if err != nil {
-		return fmt.Errorf("Error scraping clickhouse url %v: %v", e.metricsURI, err)
+		return err
 	}
 
 	for _, m := range metrics {
@@ -117,9 +99,9 @@ func (e *Exporter) collect(ch chan<- prometheus.Metric) error {
 		newMetric.Collect(ch)
 	}
 
-	asyncMetrics, err := e.parseKeyValueResponse(e.asyncMetricsURI)
+	asyncMetrics, err := e.query(asyncMetricsQuery)
 	if err != nil {
-		return fmt.Errorf("Error scraping clickhouse url %v: %v", e.asyncMetricsURI, err)
+		return err
 	}
 
 	for _, am := range asyncMetrics {
@@ -132,9 +114,9 @@ func (e *Exporter) collect(ch chan<- prometheus.Metric) error {
 		newMetric.Collect(ch)
 	}
 
-	events, err := e.parseKeyValueResponse(e.eventsURI)
+	events, err := e.query(eventsQuery)
 	if err != nil {
-		return fmt.Errorf("Error scraping clickhouse url %v: %v", e.eventsURI, err)
+		return err
 	}
 
 	for _, ev := range events {
@@ -146,9 +128,9 @@ func (e *Exporter) collect(ch chan<- prometheus.Metric) error {
 		ch <- newMetric
 	}
 
-	parts, err := e.parsePartsResponse(e.partsURI)
+	parts, err := e.queryParts(partsQuery)
 	if err != nil {
-		return fmt.Errorf("Error scraping clickhouse url %v: %v", e.partsURI, err)
+		return err
 	}
 
 	for _, part := range parts {
@@ -180,62 +162,32 @@ func (e *Exporter) collect(ch chan<- prometheus.Metric) error {
 	return nil
 }
 
-func (e *Exporter) handleResponse(uri string) ([]byte, error) {
-	req, err := http.NewRequest("GET", uri, nil)
-	if err != nil {
-		return nil, err
-	}
-	if e.user != "" && e.password != "" {
-		req.Header.Set("X-ClickHouse-User", e.user)
-		req.Header.Set("X-ClickHouse-Key", e.password)
-	}
-	resp, err := e.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("Error scraping clickhouse: %v", err)
-	}
-	defer resp.Body.Close()
-
-	data, err := ioutil.ReadAll(resp.Body)
-	if resp.StatusCode < 200 || resp.StatusCode >= 400 {
-		if err != nil {
-			data = []byte(err.Error())
-		}
-		return nil, fmt.Errorf("Status %s (%d): %s", resp.Status, resp.StatusCode, data)
-	}
-
-	return data, nil
-}
-
 type lineResult struct {
 	key   string
 	value int
 }
 
-func (e *Exporter) parseKeyValueResponse(uri string) ([]lineResult, error) {
-	data, err := e.handleResponse(uri)
+func (e *Exporter) query(query string) ([]lineResult, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	defer cancel()
+	rows, err := e.conn.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
-	// Parsing results
-	lines := strings.Split(string(data), "\n")
-	var results []lineResult = make([]lineResult, 0)
+	var results []lineResult
 
-	for i, line := range lines {
-		parts := strings.Fields(line)
-		if len(parts) == 0 {
-			continue
-		}
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("parseKeyValueResponse: unexpected %d line: %s", i, line)
-		}
-		k := strings.TrimSpace(parts[0])
-		v, err := strconv.Atoi(strings.TrimSpace(parts[1]))
-		if err != nil {
+	for rows.Next() {
+		row := lineResult{}
+		if err := rows.Scan(&row.key, &row.value); err != nil {
 			return nil, err
 		}
-		results = append(results, lineResult{k, v})
+		results = append(results, row)
 
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return results, nil
 }
@@ -248,45 +200,27 @@ type partsResult struct {
 	rows     int
 }
 
-func (e *Exporter) parsePartsResponse(uri string) ([]partsResult, error) {
-	data, err := e.handleResponse(uri)
+func (e *Exporter) queryParts(query string) ([]partsResult, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	defer cancel()
+	rows, err := e.conn.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
-	// Parsing results
-	lines := strings.Split(string(data), "\n")
-	var results []partsResult = make([]partsResult, 0)
+	var results []partsResult
 
-	for i, line := range lines {
-		parts := strings.Fields(line)
-		if len(parts) == 0 {
-			continue
-		}
-		if len(parts) != 5 {
-			return nil, fmt.Errorf("parsePartsResponse: unexpected %d line: %s", i, line)
-		}
-		database := strings.TrimSpace(parts[0])
-		table := strings.TrimSpace(parts[1])
-
-		bytes, err := strconv.Atoi(strings.TrimSpace(parts[2]))
-		if err != nil {
+	for rows.Next() {
+		row := partsResult{}
+		if err := rows.Scan(&row.database, &row.table, &row.bytes, &row.parts, &row.rows); err != nil {
 			return nil, err
 		}
-
-		count, err := strconv.Atoi(strings.TrimSpace(parts[3]))
-		if err != nil {
-			return nil, err
-		}
-
-		rows, err := strconv.Atoi(strings.TrimSpace(parts[4]))
-		if err != nil {
-			return nil, err
-		}
-
-		results = append(results, partsResult{database, table, bytes, count, rows})
+		results = append(results, row)
 	}
-
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return results, nil
 }
 
