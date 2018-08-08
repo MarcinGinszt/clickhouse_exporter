@@ -24,10 +24,18 @@ const (
 	Timeout = 1 * time.Second
 )
 
+type sqldb interface {
+	Conn(context.Context) (*sql.Conn, error)
+}
+
+type sqlconn interface {
+	QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error)
+}
+
 // Exporter collects clickhouse stats and exports them using
 // the prometheus metrics package.
 type Exporter struct {
-	conn  *sql.Conn
+	conn  sqlconn
 	mutex sync.RWMutex
 
 	scrapeFailures prometheus.Counter
@@ -40,7 +48,7 @@ type Exporter struct {
 }
 
 // NewExporter returns an initialized Exporter.
-func NewExporter(db *sql.DB) (*Exporter, error) {
+func NewExporter(db sqldb) (*Exporter, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
 	defer cancel()
 
