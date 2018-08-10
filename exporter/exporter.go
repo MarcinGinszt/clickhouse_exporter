@@ -175,10 +175,10 @@ type queryResult struct {
 	value float64
 }
 
-func (e *Exporter) queryAsyncMetrics() ([]queryResult, error) {
+func query(conn sqlconn, query string, scanner func(rows *sql.Rows) (queryResult, error)) ([]queryResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
 	defer cancel()
-	rows, err := e.conn.QueryContext(ctx, asyncMetricsQuery)
+	rows, err := conn.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -187,8 +187,8 @@ func (e *Exporter) queryAsyncMetrics() ([]queryResult, error) {
 	var results []queryResult
 
 	for rows.Next() {
-		row := queryResult{}
-		if err := rows.Scan(&row.key, &row.value); err != nil {
+		row, err := scanner(rows)
+		if err != nil {
 			return nil, err
 		}
 		results = append(results, row)
@@ -198,60 +198,40 @@ func (e *Exporter) queryAsyncMetrics() ([]queryResult, error) {
 		return nil, err
 	}
 	return results, nil
+}
+
+func asyncMetricsScanner(rows *sql.Rows) (queryResult, error) {
+	row := queryResult{}
+	err := rows.Scan(&row.key, &row.value)
+	return row, err
+}
+
+func (e *Exporter) queryAsyncMetrics() ([]queryResult, error) {
+	return query(e.conn, asyncMetricsQuery, asyncMetricsScanner)
+}
+
+func eventsScanner(rows *sql.Rows) (queryResult, error) {
+	row := queryResult{}
+	var value uint64
+	err := rows.Scan(&row.key, &value)
+	row.value = float64(value)
+	return row, err
 }
 
 func (e *Exporter) queryEvents() ([]queryResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
-	defer cancel()
-	rows, err := e.conn.QueryContext(ctx, eventsQuery)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+	return query(e.conn, eventsQuery, eventsScanner)
+}
 
-	var results []queryResult
-
-	var value uint64
-	for rows.Next() {
-		row := queryResult{}
-		if err := rows.Scan(&row.key, &value); err != nil {
-			return nil, err
-		}
-		row.value = float64(value)
-		results = append(results, row)
-
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return results, nil
+func metricsScanner(rows *sql.Rows) (queryResult, error) {
+	row := queryResult{}
+	var value int64
+	err := rows.Scan(&row.key, &value)
+	row.value = float64(value)
+	return row, err
 }
 
 func (e *Exporter) queryMetrics() ([]queryResult, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
-	defer cancel()
-	rows, err := e.conn.QueryContext(ctx, metricsQuery)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var results []queryResult
-
-	var value int64
-	for rows.Next() {
-		row := queryResult{}
-		if err := rows.Scan(&row.key, &value); err != nil {
-			return nil, err
-		}
-		row.value = float64(value)
-		results = append(results, row)
-
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return results, nil
+	return query(e.conn, metricsQuery, metricsScanner)
 }
 
 type partsResult struct {
