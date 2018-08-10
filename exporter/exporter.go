@@ -92,7 +92,7 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 }
 
 func (e *Exporter) collect(ch chan<- prometheus.Metric) error {
-	metrics, err := e.query(metricsQuery)
+	metrics, err := e.queryMetrics()
 	if err != nil {
 		return err
 	}
@@ -103,11 +103,11 @@ func (e *Exporter) collect(ch chan<- prometheus.Metric) error {
 			Name:      metricName(m.key),
 			Help:      "Number of " + m.key + " currently processed",
 		}, []string{}).WithLabelValues()
-		newMetric.Set(float64(m.value))
+		newMetric.Set(m.value)
 		newMetric.Collect(ch)
 	}
 
-	asyncMetrics, err := e.query(asyncMetricsQuery)
+	asyncMetrics, err := e.queryAsyncMetrics()
 	if err != nil {
 		return err
 	}
@@ -118,11 +118,11 @@ func (e *Exporter) collect(ch chan<- prometheus.Metric) error {
 			Name:      metricName(am.key),
 			Help:      "Number of " + am.key + " async processed",
 		}, []string{}).WithLabelValues()
-		newMetric.Set(float64(am.value))
+		newMetric.Set(am.value)
 		newMetric.Collect(ch)
 	}
 
-	events, err := e.query(eventsQuery)
+	events, err := e.queryEvents()
 	if err != nil {
 		return err
 	}
@@ -132,7 +132,7 @@ func (e *Exporter) collect(ch chan<- prometheus.Metric) error {
 			prometheus.NewDesc(
 				namespace+"_"+metricName(ev.key)+"_total",
 				"Number of "+ev.key+" total processed", []string{}, nil),
-			prometheus.CounterValue, float64(ev.value))
+			prometheus.CounterValue, ev.value)
 		ch <- newMetric
 	}
 
@@ -170,27 +170,81 @@ func (e *Exporter) collect(ch chan<- prometheus.Metric) error {
 	return nil
 }
 
-type lineResult struct {
+type queryResult struct {
 	key   string
-	value int
+	value float64
 }
 
-func (e *Exporter) query(query string) ([]lineResult, error) {
+func (e *Exporter) queryAsyncMetrics() ([]queryResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
 	defer cancel()
-	rows, err := e.conn.QueryContext(ctx, query)
+	rows, err := e.conn.QueryContext(ctx, asyncMetricsQuery)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	var results []lineResult
+	var results []queryResult
 
 	for rows.Next() {
-		row := lineResult{}
+		row := queryResult{}
 		if err := rows.Scan(&row.key, &row.value); err != nil {
 			return nil, err
 		}
+		results = append(results, row)
+
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func (e *Exporter) queryEvents() ([]queryResult, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	defer cancel()
+	rows, err := e.conn.QueryContext(ctx, eventsQuery)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []queryResult
+
+	var value uint64
+	for rows.Next() {
+		row := queryResult{}
+		if err := rows.Scan(&row.key, &value); err != nil {
+			return nil, err
+		}
+		row.value = float64(value)
+		results = append(results, row)
+
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func (e *Exporter) queryMetrics() ([]queryResult, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+	defer cancel()
+	rows, err := e.conn.QueryContext(ctx, metricsQuery)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []queryResult
+
+	var value int64
+	for rows.Next() {
+		row := queryResult{}
+		if err := rows.Scan(&row.key, &value); err != nil {
+			return nil, err
+		}
+		row.value = float64(value)
 		results = append(results, row)
 
 	}
