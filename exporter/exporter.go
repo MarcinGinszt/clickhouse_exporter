@@ -15,9 +15,9 @@ import (
 const (
 	namespace = "clickhouse" // For Prometheus metrics.
 
-	metricsQuery      = "select * from system.metrics"
-	asyncMetricsQuery = "select * from system.asynchronous_metrics"
-	eventsQuery       = "select * from system.events"
+	metricsQuery      = "select metric,value from system.metrics"
+	asyncMetricsQuery = "select metric,value from system.asynchronous_metrics"
+	eventsQuery       = "select event,value from system.events"
 	partsQuery        = "select database, table, sum(bytes) as bytes, count() as parts, sum(rows) as rows from system.parts where active = 1 group by database, table"
 
 	// Timeout is default for all database operations

@@ -40,9 +40,9 @@ func TestScrape(t *testing.T) {
 			partsRows := sqlmock.NewRows([]string{"database", "table", "bytes", "parts", "rows"}).
 				AddRow("db", "one", 1, 2, 3).
 				AddRow("db", "two", 2, 3, 4)
-			mock.ExpectQuery("^select \\*").WillReturnRows(rows)
-			mock.ExpectQuery("^select \\*").WillReturnRows(rows)
-			mock.ExpectQuery("^select \\*").WillReturnRows(rows)
+			mock.ExpectQuery("^select metric,value").WillReturnRows(rows)
+			mock.ExpectQuery("^select metric,value").WillReturnRows(rows)
+			mock.ExpectQuery("^select event,value").WillReturnRows(rows)
 			mock.ExpectQuery("^select database").WillReturnRows(partsRows)
 			err = exporter.collect(ch)
 			if err != nil {
