@@ -25,17 +25,13 @@ const (
 )
 
 type sqldb interface {
-	Conn(context.Context) (*sql.Conn, error)
-}
-
-type sqlconn interface {
 	QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error)
 }
 
 // Exporter collects clickhouse stats and exports them using
 // the prometheus metrics package.
 type Exporter struct {
-	conn  sqlconn
+	db    sqldb
 	mutex sync.RWMutex
 
 	scrapeFailures prometheus.Counter
@@ -49,16 +45,8 @@ type Exporter struct {
 
 // NewExporter returns an initialized Exporter.
 func NewExporter(db sqldb) (*Exporter, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
-	defer cancel()
-
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	return &Exporter{
-		conn: conn,
+		db: db,
 		scrapeFailures: prometheus.NewCounter(prometheus.CounterOpts{
 			Namespace: namespace,
 			Name:      "exporter_scrape_failures_total",
@@ -175,10 +163,10 @@ type queryResult struct {
 	value float64
 }
 
-func query(conn sqlconn, query string, scanner func(rows *sql.Rows) (queryResult, error)) ([]queryResult, error) {
+func query(db sqldb, query string, scanner func(rows *sql.Rows) (queryResult, error)) ([]queryResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
 	defer cancel()
-	rows, err := conn.QueryContext(ctx, query)
+	rows, err := db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -207,7 +195,7 @@ func asyncMetricsScanner(rows *sql.Rows) (queryResult, error) {
 }
 
 func (e *Exporter) queryAsyncMetrics() ([]queryResult, error) {
-	return query(e.conn, asyncMetricsQuery, asyncMetricsScanner)
+	return query(e.db, asyncMetricsQuery, asyncMetricsScanner)
 }
 
 func eventsScanner(rows *sql.Rows) (queryResult, error) {
@@ -219,7 +207,7 @@ func eventsScanner(rows *sql.Rows) (queryResult, error) {
 }
 
 func (e *Exporter) queryEvents() ([]queryResult, error) {
-	return query(e.conn, eventsQuery, eventsScanner)
+	return query(e.db, eventsQuery, eventsScanner)
 }
 
 func metricsScanner(rows *sql.Rows) (queryResult, error) {
@@ -231,7 +219,7 @@ func metricsScanner(rows *sql.Rows) (queryResult, error) {
 }
 
 func (e *Exporter) queryMetrics() ([]queryResult, error) {
-	return query(e.conn, metricsQuery, metricsScanner)
+	return query(e.db, metricsQuery, metricsScanner)
 }
 
 type partsResult struct {
@@ -245,7 +233,7 @@ type partsResult struct {
 func (e *Exporter) queryParts(query string) ([]partsResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
 	defer cancel()
-	rows, err := e.conn.QueryContext(ctx, query)
+	rows, err := e.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
