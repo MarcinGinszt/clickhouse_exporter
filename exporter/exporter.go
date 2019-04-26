@@ -27,6 +27,7 @@ const (
 
 type sqldb interface {
 	QueryContext(context.Context, string, ...interface{}) (*sql.Rows, error)
+    Exec(query string, args ...interface{}) (sql.Result, error)
 }
 
 // Exporter collects clickhouse stats and exports them using
@@ -222,9 +223,19 @@ func metricsScanner(rows *sql.Rows) (queryResult, error) {
 }
 
 func (e *Exporter) queryMetrics(filter []string) ([]queryResult, error) {
-	if len(filter) != 0{
-		metricsQueryWithFilter := fmt.Sprint(metricsQuery + " where metric in ('" + strings.Join(filter, "','") + "')" )
-		return query(e.db, metricsQueryWithFilter, metricsScanner)
+	if len(filter) != 0 {
+		var valueString string
+		for i :=0 ; i < len(filter); i++ {
+			valueString = fmt.Sprint(valueString, "?,")
+		}
+		valueString =  fmt.Sprint(valueString, "?")
+
+		stmt := fmt.Sprintf(metricsQuery + " where metric in (" + valueString + ")")
+		valueArgs := make([]interface{}, 0, len(filter))
+		for metric := range(filter) {
+			valueArgs = append(valueArgs, metric)
+		}
+		e.db.Exec(stmt, valueArgs...)
 	}
 	return query(e.db, metricsQuery, metricsScanner)
 }
