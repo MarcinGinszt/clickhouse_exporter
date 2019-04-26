@@ -3,6 +3,7 @@ package exporter
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +42,8 @@ type Exporter struct {
 
 	user     string
 	password string
+
+	MetricsFilter []string
 }
 
 // NewExporter returns an initialized Exporter.
@@ -79,8 +82,8 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	<-doneCh
 }
 
-func (e *Exporter) collect(ch chan<- prometheus.Metric) error {
-	metrics, err := e.queryMetrics()
+func (e *Exporter) collect(filter []string, ch chan<- prometheus.Metric) error {
+	metrics, err := e.queryMetrics(filter)
 	if err != nil {
 		return err
 	}
@@ -218,7 +221,11 @@ func metricsScanner(rows *sql.Rows) (queryResult, error) {
 	return row, err
 }
 
-func (e *Exporter) queryMetrics() ([]queryResult, error) {
+func (e *Exporter) queryMetrics(filter []string) ([]queryResult, error) {
+	if len(filter) != 0{
+		metricsQueryWithFilter := fmt.Sprint(metricsQuery + " where metric in ('" + strings.Join(filter, "','") + "')" )
+		return query(e.db, metricsQueryWithFilter, metricsScanner)
+	}
 	return query(e.db, metricsQuery, metricsScanner)
 }
 
@@ -259,7 +266,7 @@ func (e *Exporter) queryParts(query string) ([]partsResult, error) {
 func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	e.mutex.Lock() // To protect metrics from concurrent collects.
 	defer e.mutex.Unlock()
-	if err := e.collect(ch); err != nil {
+	if err := e.collect(e.MetricsFilter, ch); err != nil {
 		log.Printf("Error scraping clickhouse: %s", err)
 		e.scrapeFailures.Inc()
 		e.scrapeFailures.Collect(ch)

@@ -44,7 +44,7 @@ func TestScrape(t *testing.T) {
 			mock.ExpectQuery("^select metric,value").WillReturnRows(rows)
 			mock.ExpectQuery("^select event,value").WillReturnRows(rows)
 			mock.ExpectQuery("^select database").WillReturnRows(partsRows)
-			err = exporter.collect(ch)
+			err = exporter.collect(nil, ch)
 			if err != nil {
 				panic(err)
 			}
